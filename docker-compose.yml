@@ -5,6 +5,16 @@ services:
     build: ./app
     ports:
       - "5000:5000"
+    depends_on:
+      - otel-collector
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    ports:
+      - "4317:4317"   # reçoit les traces depuis l'app via OTLP/gRPC
+      - "8889:8889"   # expose les métriques pour Prometheus
+    volumes:
+      - ./otel-collector.yml:/etc/otelcol-contrib/config.yaml
 
   prometheus:
     image: prom/prometheus:latest
@@ -12,6 +22,8 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - otel-collector
 
   grafana:
     image: grafana/grafana:latest
