@@ -20,12 +20,23 @@ exporters:
     tls:
       insecure: true
 
+  clickhouse:
+    endpoint: tcp://clickhouse:9000?dial_timeout=10s
+    database: sentinelops
+    username: admin
+    password: sentinel123
+    traces_table_name: traces
+    ttl: 72h
+    timeout: 5s
+    retry_on_failure:
+      enabled: true
+
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug, otlp/jaeger]
+      exporters: [debug, otlp/jaeger, clickhouse]
     
     metrics:
       receivers: [otlp]
