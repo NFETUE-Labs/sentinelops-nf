@@ -1,6 +1,8 @@
 from clickhouse_driver import Client
 import schedule
 import time
+import requests
+import os
 from datetime import datetime
 
 client = Client(
@@ -13,6 +15,32 @@ client = Client(
 
 LATENCY_THRESHOLD_MULTIPLIER = 1.5
 MIN_REQUESTS = 5
+
+# En production, chaque client aura son propre webhook URL
+# stocké dans PostgreSQL et chargé dynamiquement
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://webhook.site/a4242c27-db18-4d94-b66e-64f2effa0796')
+
+def send_alert(service, span, duration, avg_duration, severity):
+    payload = {
+        "title": f"SentinelOps Alert — {severity.upper()}",
+        "service": service,
+        "endpoint": span,
+        "duration_ms": round(duration, 2),
+        "avg_duration_ms": round(avg_duration, 2),
+        "threshold_ms": round(avg_duration * LATENCY_THRESHOLD_MULTIPLIER, 2),
+        "severity": severity,
+        "timestamp": datetime.utcnow().isoformat(),
+        "message": f"{span} on {service} is running {round(duration/avg_duration, 1)}x slower than average"
+    }
+
+    try:
+        response = requests.post(WEBHOOK_URL, json=payload, timeout=5)
+        if response.status_code == 200:
+            print(f"Alert sent — {severity.upper()} | {service} | {span}")
+        else:
+            print(f"Alert failed — HTTP {response.status_code}")
+    except Exception as e:
+        print(f"Alert error — {e}")
 
 def detect_latency_anomalies():
     print(f"[{datetime.now()}] Running anomaly detection...")
@@ -51,9 +79,11 @@ def detect_latency_anomalies():
 
         for timestamp, span, duration, service in recent_anomalies:
             severity = "critical" if duration > avg_duration * 5 else "warning"
+            duration_ms = duration / 1e6
+            avg_ms = avg_duration / 1e6
 
             print(f"ANOMALY DETECTED — {service} | {span}")
-            print(f"Duration: {duration/1e6:.2f}ms | Avg: {avg_duration/1e6:.2f}ms | Threshold: {avg_duration * LATENCY_THRESHOLD_MULTIPLIER/1e6:.2f}ms")
+            print(f"Duration: {duration_ms:.2f}ms | Avg: {avg_ms:.2f}ms | Threshold: {avg_ms * LATENCY_THRESHOLD_MULTIPLIER:.2f}ms")
             print(f"Severity: {severity}")
 
             client.execute("""
@@ -71,16 +101,18 @@ def detect_latency_anomalies():
                 'service_name': service,
                 'anomaly_type': 'latency_spike',
                 'metric_name': span,
-                'expected_value': avg_duration / 1e6,
-                'actual_value': duration / 1e6,
+                'expected_value': avg_ms,
+                'actual_value': duration_ms,
                 'severity': severity
             }])
 
             print(f"Anomaly saved to ClickHouse")
+            send_alert(service, span, duration_ms, avg_ms, severity)
 
 def run_detector():
     print("SentinelOps Anomaly Detector started")
     print(f"Threshold: {LATENCY_THRESHOLD_MULTIPLIER}x average latency")
+    print(f"Webhook: {WEBHOOK_URL}")
 
     detect_latency_anomalies()
 
