@@ -16,6 +16,14 @@ services:
     volumes:
       - ./otel-collector.yml:/etc/otelcol-contrib/config.yaml
 
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"  # interface web Jaeger
+      - "14250:14250"  # reçoit les traces depuis le Collector
+    depends_on:
+      - otel-collector
+
   prometheus:
     image: prom/prometheus:latest
     ports:
@@ -33,3 +41,4 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     depends_on:
       - prometheus
+

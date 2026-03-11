@@ -9,7 +9,8 @@ import time, random
 
 # Configure OpenTelemetry
 # TracerProvider = le gestionnaire central de toutes les traces
-provider = TracerProvider()
+resource = Resource.create({"service.name": "sentinelops-flask"})
+provider = TracerProvider(resource=resource)
 
 # OTLPSpanExporter = envoie les traces vers le Collector OpenTelemetry
 otlp_exporter = OTLPSpanExporter(endpoint="http://otel-collector:4317", insecure=True)
