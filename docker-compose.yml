@@ -52,6 +52,15 @@ services:
       timeout: 5s
       retries: 10
 
+  anomaly-detector:
+    build: ./anomaly_detector
+    environment:
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    restart: on-failure
+
   grafana:
     image: grafana/grafana:latest
     ports:

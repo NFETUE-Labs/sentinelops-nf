@@ -1,0 +1,4 @@
+clickhouse-driver
+schedule
+python-dotenv
+requests

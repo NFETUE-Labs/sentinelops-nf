@@ -48,6 +48,13 @@ def slow():
         REQUEST_LATENCY.observe(duration)
         return f"Slow response: {duration:.2f}s"
 
+@app.route('/very-slow')
+def very_slow():
+    with tracer.start_as_current_span("process_very_slow"):
+        time.sleep(random.uniform(4, 6))
+    return {"status": "very slow response"}
+    
+
 @app.route('/metrics')
 def metrics():
     return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
