@@ -52,11 +52,43 @@ services:
       timeout: 5s
       retries: 10
 
+  postgres:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=sentinelops
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=sentinel123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d sentinelops"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   anomaly-detector:
     build: ./anomaly_detector
     environment:
       - PYTHONUNBUFFERED=1
+      - WEBHOOK_URL=https://webhook.site/a4242c27-db18-4d94-b66e-64f2effa0796
     depends_on:
+      clickhouse:
+        condition: service_healthy
+    restart: on-failure
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://admin:sentinel123@postgres:5432/sentinelops
+      - SECRET_KEY=sentinelops-secret-key-change-in-production
+    depends_on:
+      postgres:
+        condition: service_healthy
       clickhouse:
         condition: service_healthy
     restart: on-failure
@@ -72,3 +104,4 @@ services:
 
 volumes:
   clickhouse_data:
+  postgres_data:
