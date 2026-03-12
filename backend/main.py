@@ -24,13 +24,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # ClickHouse
-ch_client = ClickHouseClient(
-    host='clickhouse',
-    port=9000,
-    user='admin',
-    password='sentinel123',
-    database='sentinelops'
-)
+def get_ch_client():
+    return ClickHouseClient('clickhouse', user='admin', password='sentinel123', database='sentinelops')
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -152,7 +147,7 @@ def update_webhook(data: WebhookUpdate, current_user: User = Depends(get_current
 
 @app.get("/anomalies")
 def get_anomalies(limit: int = 50, current_user: User = Depends(get_current_user)):
-    rows = ch_client.execute("""
+    rows = get_ch_client().execute("""
         SELECT timestamp, service_name, anomaly_type, metric_name,
                expected_value, actual_value, severity
         FROM sentinelops.anomalies
@@ -174,7 +169,7 @@ def get_anomalies(limit: int = 50, current_user: User = Depends(get_current_user
 
 @app.get("/traces")
 def get_traces(limit: int = 50, current_user: User = Depends(get_current_user)):
-    rows = ch_client.execute("""
+    rows = get_ch_client().execute("""
         SELECT Timestamp, ServiceName, SpanName, Duration
         FROM sentinelops.traces
         ORDER BY Timestamp DESC
@@ -192,9 +187,9 @@ def get_traces(limit: int = 50, current_user: User = Depends(get_current_user)):
 
 @app.get("/stats")
 def get_stats(current_user: User = Depends(get_current_user)):
-    total_traces = ch_client.execute("SELECT count() FROM sentinelops.traces")[0][0]
-    total_anomalies = ch_client.execute("SELECT count() FROM sentinelops.anomalies")[0][0]
-    avg_latency = ch_client.execute("""
+    total_traces = get_ch_client().execute("SELECT count() FROM sentinelops.traces")[0][0]
+    total_anomalies = get_ch_client().execute("SELECT count() FROM sentinelops.anomalies")[0][0]
+    avg_latency = get_ch_client().execute("""
         SELECT avg(Duration) / 1e6
         FROM sentinelops.traces
         WHERE Timestamp > now() - INTERVAL 1 HOUR
