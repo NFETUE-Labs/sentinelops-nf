@@ -199,8 +199,12 @@ def get_stats(current_user: User = Depends(get_current_user)):
         FROM sentinelops.traces
         WHERE Timestamp > now() - INTERVAL 1 HOUR
     """)[0][0]
+    
+    import math
+    avg_latency_clean = 0.0 if (avg_latency is None or math.isnan(avg_latency) or math.isinf(avg_latency)) else round(avg_latency, 2)
+    
     return {
         "total_traces": total_traces,
         "total_anomalies": total_anomalies,
-        "avg_latency_ms": round(avg_latency or 0, 2)
+        "avg_latency_ms": avg_latency_clean
     }
