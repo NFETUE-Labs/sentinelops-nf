@@ -136,24 +136,46 @@ function SeverityBadge({ severity }) {
   )
 }
 
+function InfraBar({ label, value, color }) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+        <span style={{ color: 'var(--text-dim)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>{label}</span>
+        <span style={{ color: value > 90 ? 'var(--red)' : value > 70 ? 'var(--amber)' : 'var(--green)', fontWeight: 700, fontSize: 13 }}>{value}%</span>
+      </div>
+      <div style={{ background: 'var(--border)', height: 4, width: '100%' }}>
+        <div style={{
+          height: 4,
+          width: `${value}%`,
+          background: value > 90 ? 'var(--red)' : value > 70 ? 'var(--amber)' : 'var(--green)',
+          transition: 'width 0.3s ease'
+        }} />
+      </div>
+    </div>
+  )
+}
+
 function Dashboard({ token, onLogout }) {
   const { get } = useApi(token)
   const [stats, setStats] = useState(null)
   const [anomalies, setAnomalies] = useState([])
   const [traces, setTraces] = useState([])
+  const [infra, setInfra] = useState([])
   const [tab, setTab] = useState('anomalies')
   const [lastUpdate, setLastUpdate] = useState(null)
 
   const refresh = useCallback(async () => {
     try {
-      const [s, a, t] = await Promise.all([
+      const [s, a, t, i] = await Promise.all([
         get('/stats'),
         get('/anomalies?limit=20'),
-        get('/traces?limit=20')
+        get('/traces?limit=20'),
+        get('/infra?limit=10')
       ])
       setStats(s)
       setAnomalies(a)
       setTraces(t)
+      setInfra(i)
       setLastUpdate(new Date())
     } catch (e) {
       if (e.message === '401') onLogout()
@@ -166,9 +188,10 @@ function Dashboard({ token, onLogout }) {
     return () => clearInterval(interval)
   }, [refresh])
 
+  const latestInfra = infra[0]
+
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      {/* Header */}
       <div style={{
         borderBottom: '1px solid var(--border)',
         padding: '0 32px',
@@ -200,16 +223,17 @@ function Dashboard({ token, onLogout }) {
       </div>
 
       <div style={{ padding: '32px', flex: 1 }}>
-        {/* Stats */}
         <div className="fade-in" style={{ display: 'flex', gap: 16, marginBottom: 32 }}>
           <StatCard label="total traces" value={stats?.total_traces?.toLocaleString()} />
           <StatCard label="anomalies detected" value={stats?.total_anomalies} accent="var(--amber)" />
           <StatCard label="avg latency (1h)" value={stats ? `${stats.avg_latency_ms}ms` : null} accent={stats?.avg_latency_ms > 1000 ? 'var(--red)' : 'var(--green)'} />
+          {latestInfra && (
+            <StatCard label="cpu" value={`${latestInfra.cpu_percent}%`} accent={latestInfra.cpu_percent > 90 ? 'var(--red)' : 'var(--green)'} />
+          )}
         </div>
 
-        {/* Tabs */}
         <div style={{ display: 'flex', gap: 0, marginBottom: 20, borderBottom: '1px solid var(--border)' }}>
-          {['anomalies', 'traces'].map(t => (
+          {['anomalies', 'traces', 'infrastructure'].map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
               background: 'none',
               borderBottom: tab === t ? '2px solid var(--amber)' : '2px solid transparent',
@@ -220,12 +244,11 @@ function Dashboard({ token, onLogout }) {
               fontSize: 12, cursor: 'pointer',
               textTransform: 'uppercase', letterSpacing: 1
             }}>
-              {t} {t === 'anomalies' ? `(${anomalies.length})` : `(${traces.length})`}
+              {t === 'anomalies' ? `anomalies (${anomalies.length})` : t === 'traces' ? `traces (${traces.length})` : 'infrastructure'}
             </button>
           ))}
         </div>
 
-        {/* Anomalies */}
         {tab === 'anomalies' && (
           <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {anomalies.length === 0 && (
@@ -261,7 +284,6 @@ function Dashboard({ token, onLogout }) {
           </div>
         )}
 
-        {/* Traces */}
         {tab === 'traces' && (
           <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {traces.map((t, i) => (
@@ -293,6 +315,32 @@ function Dashboard({ token, onLogout }) {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {tab === 'infrastructure' && (
+          <div className="fade-in">
+            {infra.length === 0 ? (
+              <div style={{ color: 'var(--text-dim)', padding: 24, textAlign: 'center' }}>
+                no infrastructure data — install sentinelops SDK to collect metrics
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                {infra.slice(0, 6).map((item, i) => (
+                  <div key={i} style={{
+                    background: 'var(--bg-card)', border: '1px solid var(--border)',
+                    padding: '24px', flex: '1 1 300px'
+                  }}>
+                    <div style={{ color: 'var(--text-dim)', fontSize: 11, marginBottom: 16, textTransform: 'uppercase', letterSpacing: 1 }}>
+                      {item.service_name} — {new Date(item.timestamp).toLocaleTimeString()}
+                    </div>
+                    <InfraBar label="CPU" value={item.cpu_percent} />
+                    <InfraBar label="Memory" value={item.memory_percent} />
+                    <InfraBar label="Disk" value={item.disk_percent} />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
