@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS sentinelops.anomalies (
     metric_name String,
     expected_value Float64,
     actual_value Float64,
-    severity String
+    severity String,
+    api_key String DEFAULT ''
 ) ENGINE = MergeTree()
 ORDER BY (timestamp, service_name);
