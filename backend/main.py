@@ -210,3 +210,8 @@ def get_stats(current_user: User = Depends(get_current_user)):
         "total_anomalies": total_anomalies,
         "avg_latency_ms": avg_latency_clean
     }
+
+
+@app.get("/sentry-debug")
+async def trigger_error():
+    division_by_zero = 1 / 0
