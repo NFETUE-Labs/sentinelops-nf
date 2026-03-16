@@ -11,6 +11,7 @@ from clickhouse_driver import Client as ClickHouseClient
 from pydantic import BaseModel
 import os
 import uuid
+import math
 import sentry_sdk
 
 sentry_sdk.init(
@@ -158,9 +159,10 @@ def get_anomalies(limit: int = 50, current_user: User = Depends(get_current_user
         SELECT timestamp, service_name, anomaly_type, metric_name,
                expected_value, actual_value, severity
         FROM sentinelops.anomalies
+        WHERE api_key = %(api_key)s
         ORDER BY timestamp DESC
         LIMIT %(limit)s
-    """, {'limit': limit})
+    """, {'limit': limit, 'api_key': current_user.api_key})
     return [
         {
             "timestamp": str(row[0]),
@@ -179,9 +181,10 @@ def get_traces(limit: int = 50, current_user: User = Depends(get_current_user)):
     rows = get_ch_client().execute("""
         SELECT Timestamp, ServiceName, SpanName, Duration
         FROM sentinelops.traces
+        WHERE ResourceAttributes['sentinelops.api_key'] = %(api_key)s
         ORDER BY Timestamp DESC
         LIMIT %(limit)s
-    """, {'limit': limit})
+    """, {'limit': limit, 'api_key': current_user.api_key})
     return [
         {
             "timestamp": str(row[0]),
@@ -194,23 +197,29 @@ def get_traces(limit: int = 50, current_user: User = Depends(get_current_user)):
 
 @app.get("/stats")
 def get_stats(current_user: User = Depends(get_current_user)):
-    total_traces = get_ch_client().execute("SELECT count() FROM sentinelops.traces")[0][0]
-    total_anomalies = get_ch_client().execute("SELECT count() FROM sentinelops.anomalies")[0][0]
+    api_key = current_user.api_key
+    total_traces = get_ch_client().execute("""
+        SELECT count() FROM sentinelops.traces
+        WHERE ResourceAttributes['sentinelops.api_key'] = %(api_key)s
+    """, {'api_key': api_key})[0][0]
+    total_anomalies = get_ch_client().execute("""
+        SELECT count() FROM sentinelops.anomalies
+        WHERE api_key = %(api_key)s
+    """, {'api_key': api_key})[0][0]
     avg_latency = get_ch_client().execute("""
         SELECT avg(Duration) / 1e6
         FROM sentinelops.traces
-        WHERE Timestamp > now() - INTERVAL 1 HOUR
-    """)[0][0]
-    
-    import math
+        WHERE ResourceAttributes['sentinelops.api_key'] = %(api_key)s
+        AND Timestamp > now() - INTERVAL 1 HOUR
+    """, {'api_key': api_key})[0][0]
+
     avg_latency_clean = 0.0 if (avg_latency is None or math.isnan(avg_latency) or math.isinf(avg_latency)) else round(avg_latency, 2)
-    
+
     return {
         "total_traces": total_traces,
         "total_anomalies": total_anomalies,
         "avg_latency_ms": avg_latency_clean
     }
-
 
 @app.get("/sentry-debug")
 async def trigger_error():
