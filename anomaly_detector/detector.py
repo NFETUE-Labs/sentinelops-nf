@@ -5,20 +5,19 @@ import requests
 import os
 from datetime import datetime
 
-client = Client(
-    host='clickhouse',
-    port=9000,
-    user='admin',
-    password='sentinel123',
-    database='sentinelops'
-)
-
 LATENCY_THRESHOLD_MULTIPLIER = 1.5
 MIN_REQUESTS = 5
 
-# En production, chaque client aura son propre webhook URL
-# stocké dans PostgreSQL et chargé dynamiquement
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://webhook.site/a4242c27-db18-4d94-b66e-64f2effa0796')
+
+def get_ch_client():
+    return Client(
+        host='clickhouse',
+        port=9000,
+        user='admin',
+        password='sentinel123',
+        database='sentinelops'
+    )
 
 def send_alert(service, span, duration, avg_duration, severity):
     payload = {
@@ -45,15 +44,18 @@ def send_alert(service, span, duration, avg_duration, severity):
 def detect_latency_anomalies():
     print(f"[{datetime.now()}] Running anomaly detection...")
 
+    client = get_ch_client()
+
     historical_avg = client.execute("""
         SELECT
             SpanName,
             avg(Duration) as avg_duration,
-            count() as request_count
+            count() as request_count,
+            ResourceAttributes['sentinelops.api_key'] as api_key
         FROM sentinelops.traces
         WHERE Timestamp > now() - INTERVAL 30 MINUTE
         AND SpanName LIKE 'GET %%'
-        GROUP BY SpanName
+        GROUP BY SpanName, api_key
         HAVING request_count >= %(min_requests)s
     """, {'min_requests': MIN_REQUESTS})
 
@@ -61,23 +63,26 @@ def detect_latency_anomalies():
         print("Not enough data yet for anomaly detection.")
         return
 
-    for span_name, avg_duration, count in historical_avg:
-        recent_anomalies = client.execute("""
+    for span_name, avg_duration, count, api_key in historical_avg:
+        recent_anomalies = get_ch_client().execute("""
             SELECT
                 Timestamp,
                 SpanName,
                 Duration,
-                ServiceName
+                ServiceName,
+                ResourceAttributes['sentinelops.api_key'] as api_key
             FROM sentinelops.traces
             WHERE Timestamp > now() - INTERVAL 1 MINUTE
             AND SpanName = %(span_name)s
             AND Duration > %(threshold)s
+            AND ResourceAttributes['sentinelops.api_key'] = %(api_key)s
         """, {
             'span_name': span_name,
-            'threshold': avg_duration * LATENCY_THRESHOLD_MULTIPLIER
+            'threshold': avg_duration * LATENCY_THRESHOLD_MULTIPLIER,
+            'api_key': api_key
         })
 
-        for timestamp, span, duration, service in recent_anomalies:
+        for timestamp, span, duration, service, api_key in recent_anomalies:
             severity = "critical" if duration > avg_duration * 5 else "warning"
             duration_ms = duration / 1e6
             avg_ms = avg_duration / 1e6
@@ -86,7 +91,7 @@ def detect_latency_anomalies():
             print(f"Duration: {duration_ms:.2f}ms | Avg: {avg_ms:.2f}ms | Threshold: {avg_ms * LATENCY_THRESHOLD_MULTIPLIER:.2f}ms")
             print(f"Severity: {severity}")
 
-            client.execute("""
+            get_ch_client().execute("""
                 INSERT INTO sentinelops.anomalies (
                     timestamp,
                     service_name,
@@ -94,7 +99,8 @@ def detect_latency_anomalies():
                     metric_name,
                     expected_value,
                     actual_value,
-                    severity
+                    severity,
+                    api_key
                 ) VALUES
             """, [{
                 'timestamp': timestamp,
@@ -103,7 +109,8 @@ def detect_latency_anomalies():
                 'metric_name': span,
                 'expected_value': avg_ms,
                 'actual_value': duration_ms,
-                'severity': severity
+                'severity': severity,
+                'api_key': api_key
             }])
 
             print(f"Anomaly saved to ClickHouse")
