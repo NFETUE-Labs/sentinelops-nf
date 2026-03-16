@@ -55,7 +55,7 @@ def detect_latency_anomalies():
         FROM sentinelops.traces
         WHERE Timestamp > now() - INTERVAL 30 MINUTE
         AND SpanName LIKE 'GET %%'
-        GROUP BY SpanName, api_key
+        GROUP BY SpanName, ResourceAttributes['sentinelops.api_key']
         HAVING request_count >= %(min_requests)s
     """, {'min_requests': MIN_REQUESTS})
 
