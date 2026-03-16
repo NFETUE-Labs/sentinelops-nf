@@ -224,3 +224,30 @@ def get_stats(current_user: User = Depends(get_current_user)):
 @app.get("/sentry-debug")
 async def trigger_error():
     division_by_zero = 1 / 0
+
+
+@app.get("/infra")
+def get_infra(current_user: User = Depends(get_current_user)):
+    rows = get_ch_client().execute("""
+        SELECT
+            Timestamp,
+            ServiceName,
+            SpanAttributes['metric.cpu_percent'] as cpu,
+            SpanAttributes['metric.memory_percent'] as memory,
+            SpanAttributes['metric.disk_percent'] as disk
+        FROM sentinelops.traces
+        WHERE ResourceAttributes['sentinelops.api_key'] = %(api_key)s
+        AND SpanName = 'sentinelops.infra.metrics'
+        ORDER BY Timestamp DESC
+        LIMIT 20
+    """, {'api_key': current_user.api_key})
+    return [
+        {
+            "timestamp": str(row[0]),
+            "service_name": row[1],
+            "cpu_percent": float(row[2]) if row[2] else 0,
+            "memory_percent": float(row[3]) if row[3] else 0,
+            "disk_percent": float(row[4]) if row[4] else 0
+        }
+        for row in rows
+    ]
