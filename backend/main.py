@@ -14,7 +14,7 @@ import uuid
 import sentry_sdk
 
 sentry_sdk.init(
-    dsn="https://0f4f1b08a40f1690501084ed2377bf9d@o4511017293971456.ingest.de.sentry.io/4511052951126096",
+    dsn=os.getenv("SENTRY_DSN_BACKEND", ""),
     send_default_pii=True,
     traces_sample_rate=0.1,
 )

@@ -86,6 +86,7 @@ services:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://admin:sentinel123@postgres:5432/sentinelops
       - SECRET_KEY=sentinelops-secret-key-change-in-production
+      - SENTRY_DSN_BACKEND=dsn=https://0f4f1b08a40f1690501084ed2377bf9d@o4511017293971456.ingest.de.sentry.io/4511052951126096
     depends_on:
       postgres:
         condition: service_healthy
