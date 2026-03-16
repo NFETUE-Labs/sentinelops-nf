@@ -11,6 +11,13 @@ from clickhouse_driver import Client as ClickHouseClient
 from pydantic import BaseModel
 import os
 import uuid
+import sentry_sdk
+
+sentry_sdk.init(
+    dsn="https://0f4f1b08a40f1690501084ed2377bf9d@o4511017293971456.ingest.de.sentry.io/4511052951126096",
+    send_default_pii=True,
+    traces_sample_rate=0.1,
+)
 
 # Config
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://admin:sentinel123@postgres:5432/sentinelops')
