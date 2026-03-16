@@ -221,11 +221,6 @@ def get_stats(current_user: User = Depends(get_current_user)):
         "avg_latency_ms": avg_latency_clean
     }
 
-@app.get("/sentry-debug")
-async def trigger_error():
-    division_by_zero = 1 / 0
-
-
 @app.get("/infra")
 def get_infra(current_user: User = Depends(get_current_user)):
     rows = get_ch_client().execute("""
