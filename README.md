@@ -62,6 +62,23 @@ Demo login for the local stack:
 
 The demo Flask app is wired to the same API key, so once logged in you can open the Containers tab in the dashboard and see its live container metrics.
 
+## CI/CD Deployment (DigitalOcean)
+
+This repository now includes a GitHub Actions workflow at [.github/workflows/deploy-digitalocean.yml](.github/workflows/deploy-digitalocean.yml) that runs on each push to `main`.
+
+To enable automatic production updates for https://app.sentinelops.page, configure these repository secrets:
+
+- `DIGITALOCEAN_ACCESS_TOKEN`: Personal Access Token with App Platform write access
+- `DIGITALOCEAN_APP_ID`: Target DigitalOcean App Platform application ID
+
+Deployment flow:
+
+1. Push changes to `main`
+2. GitHub Actions validates `docker-compose.yml`
+3. GitHub Actions triggers `doctl apps create-deployment <APP_ID> --wait`
+
+If secrets are missing, the workflow fails early with a clear error.
+
 ## Python SDK
 
 Instrument your app in 2 lines:
