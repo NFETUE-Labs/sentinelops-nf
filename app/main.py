@@ -1,32 +1,23 @@
 from flask import Flask, Response
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from opentelemetry import trace
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.flask import FlaskInstrumentor
+from sentinelops import init as sentinelops_init
+import os
 import time, random
 
-# Configure OpenTelemetry
-# TracerProvider = le gestionnaire central de toutes les traces
-resource = Resource.create({"service.name": "sentinelops-flask"})
-provider = TracerProvider(resource=resource)
+SENTINELOPS_API_KEY = os.getenv('SENTINELOPS_API_KEY', 'demo-api-key')
+SENTINELOPS_ENDPOINT = os.getenv('SENTINELOPS_ENDPOINT', 'http://otel-collector:4317')
 
-# OTLPSpanExporter = envoie les traces vers le Collector OpenTelemetry
-otlp_exporter = OTLPSpanExporter(endpoint="http://otel-collector:4317", insecure=True)
-
-# BatchSpanProcessor = regroupe les traces par batch avant d'envoyer (plus efficace)
-provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
-trace.set_tracer_provider(provider)
+sentinelops_init(
+    api_key=SENTINELOPS_API_KEY,
+    service_name='sentinelops-flask-demo',
+    endpoint=SENTINELOPS_ENDPOINT,
+)
 
 # Crée un tracer pour cette app
 tracer = trace.get_tracer(__name__)
 
 app = Flask(__name__)
-
-# Instrumente Flask automatiquement — chaque requête devient une trace
-FlaskInstrumentor().instrument_app(app)
 
 # Métriques Prometheus (on garde les deux pour l'instant)
 REQUEST_COUNT = Counter('app_requests_total', 'Total requests', ['endpoint'])

@@ -12,7 +12,7 @@ Application → OpenTelemetry Collector → ClickHouse (traces + anomalies)
 
 Anomaly Detector → reads ClickHouse → detects spikes → webhook alerts
 FastAPI Backend  → JWT auth → PostgreSQL → reads ClickHouse
-React Dashboard  → real-time anomalies, traces, stats
+React Dashboard  → real-time anomalies, traces, infra, containers
 ```
 
 ## Stack
@@ -33,6 +33,7 @@ React Dashboard  → real-time anomalies, traces, stats
 
 - Distributed tracing with OpenTelemetry
 - Real-time metrics collection and visualization
+- Docker container metrics with per-container CPU and memory snapshots
 - Automatic anomaly detection on latency spikes
 - Webhook alerting on anomalies
 - JWT authentication with user management
@@ -54,6 +55,13 @@ Services available after startup:
 - Jaeger: http://localhost:16686
 - Prometheus: http://localhost:9090
 
+Demo login for the local stack:
+
+- Email: demo@sentinelops.local
+- Password: demo123
+
+The demo Flask app is wired to the same API key, so once logged in you can open the Containers tab in the dashboard and see its live container metrics.
+
 ## Python SDK
 
 Instrument your app in 2 lines:
@@ -64,6 +72,8 @@ pip install sentinelops
 from sentinelops import init
 init(api_key="your-api-key", service_name="your-service")
 ```
+
+Container monitoring is enabled automatically when the SDK can reach the Docker socket. The dashboard exposes it in the Containers tab.
 
 ## Roadmap
 

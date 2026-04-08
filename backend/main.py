@@ -35,11 +35,39 @@ Base = declarative_base()
 def get_ch_client():
     return ClickHouseClient('clickhouse', user='admin', password='sentinel123', database='sentinelops')
 
+
+def ensure_clickhouse_schema():
+    client = get_ch_client()
+    try:
+        client.execute("""
+            ALTER TABLE sentinelops.anomalies
+            ADD COLUMN IF NOT EXISTS api_key String DEFAULT ''
+        """)
+    except Exception as exc:
+        # Keep API startup resilient even if ClickHouse is not ready yet.
+        print(f"[SentinelOps] ClickHouse schema check skipped: {exc}")
+
+
+def anomalies_has_api_key() -> bool:
+    try:
+        rows = get_ch_client().execute("""
+            SELECT count()
+            FROM system.columns
+            WHERE database = 'sentinelops'
+            AND table = 'anomalies'
+            AND name = 'api_key'
+        """)
+        return rows[0][0] > 0
+    except Exception:
+        return False
+
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 app = FastAPI(title="SentinelOps API", version="0.1.0")
+
+ensure_clickhouse_schema()
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,6 +88,34 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 Base.metadata.create_all(bind=engine)
+
+
+def seed_demo_user():
+    demo_email = os.getenv("DEMO_USER_EMAIL")
+    demo_password = os.getenv("DEMO_USER_PASSWORD")
+    demo_api_key = os.getenv("DEMO_USER_API_KEY")
+
+    if not demo_email or not demo_password or not demo_api_key:
+        return
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == demo_email).first()
+        if user:
+            if user.api_key != demo_api_key:
+                user.api_key = demo_api_key
+                db.commit()
+            return
+
+        user = User(
+            email=demo_email,
+            hashed_password=hash_password(demo_password),
+            api_key=demo_api_key,
+        )
+        db.add(user)
+        db.commit()
+    finally:
+        db.close()
 
 # Schemas
 class UserCreate(BaseModel):
@@ -83,6 +139,21 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
+
+class ContainerMetric(BaseModel):
+    timestamp: str
+    service_name: str
+    container_id: str
+    container_name: str
+    container_image: str
+    container_status: str
+    cpu_percent: float
+    memory_percent: float
+    memory_usage_mb: float
+    memory_limit_mb: float
+    network_rx_mb: float
+    network_tx_mb: float
+
 # Helpers
 def get_db():
     db = SessionLocal()
@@ -96,6 +167,9 @@ def hash_password(password: str):
 
 def verify_password(plain: str, hashed: str):
     return pwd_context.verify(plain, hashed)
+
+
+seed_demo_user()
 
 def create_token(data: dict):
     to_encode = data.copy()
@@ -155,14 +229,23 @@ def update_webhook(data: WebhookUpdate, current_user: User = Depends(get_current
 
 @app.get("/anomalies")
 def get_anomalies(limit: int = 50, current_user: User = Depends(get_current_user)):
-    rows = get_ch_client().execute("""
-        SELECT timestamp, service_name, anomaly_type, metric_name,
-               expected_value, actual_value, severity
-        FROM sentinelops.anomalies
-        WHERE api_key = %(api_key)s
-        ORDER BY timestamp DESC
-        LIMIT %(limit)s
-    """, {'limit': limit, 'api_key': current_user.api_key})
+    if anomalies_has_api_key():
+        rows = get_ch_client().execute("""
+            SELECT timestamp, service_name, anomaly_type, metric_name,
+                   expected_value, actual_value, severity
+            FROM sentinelops.anomalies
+            WHERE api_key = %(api_key)s
+            ORDER BY timestamp DESC
+            LIMIT %(limit)s
+        """, {'limit': limit, 'api_key': current_user.api_key})
+    else:
+        rows = get_ch_client().execute("""
+            SELECT timestamp, service_name, anomaly_type, metric_name,
+                   expected_value, actual_value, severity
+            FROM sentinelops.anomalies
+            ORDER BY timestamp DESC
+            LIMIT %(limit)s
+        """, {'limit': limit})
     return [
         {
             "timestamp": str(row[0]),
@@ -202,10 +285,15 @@ def get_stats(current_user: User = Depends(get_current_user)):
         SELECT count() FROM sentinelops.traces
         WHERE ResourceAttributes['sentinelops.api_key'] = %(api_key)s
     """, {'api_key': api_key})[0][0]
-    total_anomalies = get_ch_client().execute("""
-        SELECT count() FROM sentinelops.anomalies
-        WHERE api_key = %(api_key)s
-    """, {'api_key': api_key})[0][0]
+    if anomalies_has_api_key():
+        total_anomalies = get_ch_client().execute("""
+            SELECT count() FROM sentinelops.anomalies
+            WHERE api_key = %(api_key)s
+        """, {'api_key': api_key})[0][0]
+    else:
+        total_anomalies = get_ch_client().execute("""
+            SELECT count() FROM sentinelops.anomalies
+        """)[0][0]
     avg_latency = get_ch_client().execute("""
         SELECT avg(Duration) / 1e6
         FROM sentinelops.traces
@@ -243,6 +331,47 @@ def get_infra(current_user: User = Depends(get_current_user)):
             "cpu_percent": float(row[2]) if row[2] else 0,
             "memory_percent": float(row[3]) if row[3] else 0,
             "disk_percent": float(row[4]) if row[4] else 0
+        }
+        for row in rows
+    ]
+
+
+@app.get("/containers", response_model=list[ContainerMetric])
+def get_containers(limit: int = 50, current_user: User = Depends(get_current_user)):
+    rows = get_ch_client().execute("""
+        SELECT
+            Timestamp,
+            ServiceName,
+            SpanAttributes['container.id'] as container_id,
+            SpanAttributes['container.name'] as container_name,
+            SpanAttributes['container.image'] as container_image,
+            SpanAttributes['container.status'] as container_status,
+            SpanAttributes['metric.cpu_percent'] as cpu,
+            SpanAttributes['metric.memory_percent'] as memory_percent,
+            SpanAttributes['metric.memory_usage_mb'] as memory_usage_mb,
+            SpanAttributes['metric.memory_limit_mb'] as memory_limit_mb,
+            SpanAttributes['metric.network_rx_mb'] as network_rx_mb,
+            SpanAttributes['metric.network_tx_mb'] as network_tx_mb
+        FROM sentinelops.traces
+        WHERE ResourceAttributes['sentinelops.api_key'] = %(api_key)s
+        AND SpanName = 'sentinelops.container.metrics'
+        ORDER BY Timestamp DESC
+        LIMIT %(limit)s
+    """, {'api_key': current_user.api_key, 'limit': limit})
+    return [
+        {
+            "timestamp": str(row[0]),
+            "service_name": row[1],
+            "container_id": row[2] or "",
+            "container_name": row[3] or "",
+            "container_image": row[4] or "",
+            "container_status": row[5] or "",
+            "cpu_percent": float(row[6]) if row[6] else 0,
+            "memory_percent": float(row[7]) if row[7] else 0,
+            "memory_usage_mb": float(row[8]) if row[8] else 0,
+            "memory_limit_mb": float(row[9]) if row[9] else 0,
+            "network_rx_mb": float(row[10]) if row[10] else 0,
+            "network_tx_mb": float(row[11]) if row[11] else 0,
         }
         for row in rows
     ]

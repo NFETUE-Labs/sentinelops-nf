@@ -1,8 +1,16 @@
 services:
   flask-app:
-    build: ./app
+    build:
+      context: .
+      dockerfile: app/Dockerfile
     ports:
       - "5000:5000"
+    environment:
+      - SENTINELOPS_API_KEY=demo-api-key
+      - SENTINELOPS_ENDPOINT=http://otel-collector:4317
+      - SENTINELOPS_COLLECT_CONTAINERS=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - otel-collector
 
@@ -87,6 +95,9 @@ services:
       - DATABASE_URL=postgresql://admin:sentinel123@postgres:5432/sentinelops
       - SECRET_KEY=sentinelops-secret-key-change-in-production
       - SENTRY_DSN_BACKEND=https://0f4f1b08a40f1690501084ed2377bf9d@o4511017293971456.ingest.de.sentry.io/4511052951126096
+      - DEMO_USER_EMAIL=demo@sentinelops.local
+      - DEMO_USER_PASSWORD=demo123
+      - DEMO_USER_API_KEY=demo-api-key
     depends_on:
       postgres:
         condition: service_healthy

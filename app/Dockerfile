@@ -1,6 +1,8 @@
 FROM python:3.11-slim
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
+COPY app/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+COPY sentinelops-sdk ./sentinelops-sdk
+RUN pip install --no-cache-dir ./sentinelops-sdk
+COPY app ./
 CMD ["python", "main.py"]
