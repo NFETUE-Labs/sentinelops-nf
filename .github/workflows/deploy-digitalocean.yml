@@ -10,6 +10,9 @@ concurrency:
   group: production-deploy
   cancel-in-progress: true
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   verify:
     name: Verify Compose Config
@@ -27,6 +30,20 @@ jobs:
     needs: verify
     if: github.ref == 'refs/heads/main'
     steps:
+      - name: Validate deployment secrets
+        env:
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          DIGITALOCEAN_APP_ID: ${{ secrets.DIGITALOCEAN_APP_ID }}
+        run: |
+          if [ -z "$DIGITALOCEAN_ACCESS_TOKEN" ]; then
+            echo "DIGITALOCEAN_ACCESS_TOKEN is missing"
+            exit 1
+          fi
+          if [ -z "$DIGITALOCEAN_APP_ID" ]; then
+            echo "DIGITALOCEAN_APP_ID is missing"
+            exit 1
+          fi
+
       - name: Install doctl
         uses: digitalocean/action-doctl@v2
         with:
