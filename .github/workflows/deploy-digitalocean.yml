@@ -1,43 +1,43 @@
 name: Deploy To DigitalOcean
 
 on:
-	push:
-		branches:
-			- main
-	workflow_dispatch:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 concurrency:
-	group: production-deploy
-	cancel-in-progress: true
+  group: production-deploy
+  cancel-in-progress: true
 
 jobs:
-	verify:
-		name: Verify Compose Config
-		runs-on: ubuntu-latest
-		steps:
-			- name: Checkout repository
-				uses: actions/checkout@v4
+  verify:
+    name: Verify Compose Config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-			- name: Validate docker-compose file
-				run: docker compose -f docker-compose.yml config >/dev/null
+      - name: Validate docker-compose file
+        run: docker compose -f docker-compose.yml config >/dev/null
 
-	deploy:
-		name: Trigger DigitalOcean Deployment
-		runs-on: ubuntu-latest
-		needs: verify
-		if: github.ref == 'refs/heads/main'
-		steps:
-			- name: Install doctl
-				uses: digitalocean/action-doctl@v2
-				with:
-					token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+  deploy:
+    name: Trigger DigitalOcean Deployment
+    runs-on: ubuntu-latest
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
 
-			- name: Trigger deployment on App Platform
-				env:
-					DIGITALOCEAN_APP_ID: ${{ secrets.DIGITALOCEAN_APP_ID }}
-				run: |
-					if [ -z "$DIGITALOCEAN_APP_ID" ]; then
-						echo "DIGITALOCEAN_APP_ID is missing"
-						exit 1
-					fi
-					doctl apps create-deployment "$DIGITALOCEAN_APP_ID" --wait
+      - name: Trigger deployment on App Platform
+        env:
+          DIGITALOCEAN_APP_ID: ${{ secrets.DIGITALOCEAN_APP_ID }}
+        run: |
+          if [ -z "$DIGITALOCEAN_APP_ID" ]; then
+            echo "DIGITALOCEAN_APP_ID is missing"
+            exit 1
+          fi
+          doctl apps create-deployment "$DIGITALOCEAN_APP_ID" --wait
