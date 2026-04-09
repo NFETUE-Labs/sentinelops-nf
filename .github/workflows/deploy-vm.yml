@@ -51,7 +51,7 @@ jobs:
           username: root
           key: ${{ secrets.DO_SSH_KEY }}
           script_stop: true
-          command_timeout: 30m
+          command_timeout: 90m
           script: |
             set -e
             echo "[deploy] Entering project directory"
@@ -65,5 +65,9 @@ jobs:
               git stash push -u -m "ci-auto-stash-$(date -u +%Y%m%dT%H%M%SZ)"
             fi
             git pull --ff-only origin main
-            echo "[deploy] Rebuilding and restarting containers"
-            docker compose up --build -d --remove-orphans
+            echo "[deploy] Building images"
+            docker compose build
+            echo "[deploy] Restarting services"
+            docker compose up -d --remove-orphans
+            echo "[deploy] Services status"
+            docker compose ps
