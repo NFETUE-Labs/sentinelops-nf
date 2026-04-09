@@ -53,41 +53,48 @@ jobs:
           script_stop: true
           command_timeout: 90m
           script: |
-            set -e
+            cat > /tmp/sentinelops_deploy.sh <<'EOF'
+            #!/usr/bin/env bash
+            set -euo pipefail
+
+            retry() {
+              local attempts="$1"
+              shift
+              local n=1
+              while true; do
+                "$@" && return 0
+                if [[ "$n" -ge "$attempts" ]]; then
+                  return 1
+                fi
+                echo "[deploy] command failed (attempt $n/$attempts): $*"
+                n=$((n+1))
+                sleep 8
+              done
+            }
+
             echo "[deploy] Entering project directory"
             cd /root/sentinelops-nf
+
             echo "[deploy] Syncing repository"
-            n=0
-            until [ "$n" -ge 5 ]; do
-              git fetch origin main && break
-              n=$((n+1))
-              echo "[deploy] git fetch failed, retry $n/5"
-              sleep 8
-            done
-            if [ "$n" -ge 5 ]; then
-              echo "[deploy] git fetch failed after retries"
-              exit 1
-            fi
+            retry 5 git fetch origin main || { echo "[deploy] git fetch failed after retries"; exit 1; }
             git checkout main
+
             dirty_status="$(git status --porcelain || true)"
-            if [ -n "$dirty_status" ]; then
-              echo "Local changes detected on VM, creating auto-stash"
+            if [[ -n "$dirty_status" ]]; then
+              echo "[deploy] Local changes detected, creating auto-stash"
               git stash push -u -m "ci-auto-stash-$(date -u +%Y%m%dT%H%M%SZ)"
             fi
-            n=0
-            until [ "$n" -ge 5 ]; do
-              git pull --ff-only origin main && break
-              n=$((n+1))
-              echo "[deploy] git pull failed, retry $n/5"
-              sleep 8
-            done
-            if [ "$n" -ge 5 ]; then
-              echo "[deploy] git pull failed after retries"
-              exit 1
-            fi
+
+            retry 5 git pull --ff-only origin main || { echo "[deploy] git pull failed after retries"; exit 1; }
+
             echo "[deploy] Building images"
             docker compose build
+
             echo "[deploy] Restarting services"
             docker compose up -d --remove-orphans
+
             echo "[deploy] Services status"
             docker compose ps
+            EOF
+            chmod +x /tmp/sentinelops_deploy.sh
+            /tmp/sentinelops_deploy.sh
