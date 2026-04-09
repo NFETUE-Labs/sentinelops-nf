@@ -57,14 +57,34 @@ jobs:
             echo "[deploy] Entering project directory"
             cd /root/sentinelops-nf
             echo "[deploy] Syncing repository"
-            git fetch origin main
+            n=0
+            until [ "$n" -ge 5 ]; do
+              git fetch origin main && break
+              n=$((n+1))
+              echo "[deploy] git fetch failed, retry $n/5"
+              sleep 8
+            done
+            if [ "$n" -ge 5 ]; then
+              echo "[deploy] git fetch failed after retries"
+              exit 1
+            fi
             git checkout main
             dirty_status="$(git status --porcelain || true)"
             if [ -n "$dirty_status" ]; then
               echo "Local changes detected on VM, creating auto-stash"
               git stash push -u -m "ci-auto-stash-$(date -u +%Y%m%dT%H%M%SZ)"
             fi
-            git pull --ff-only origin main
+            n=0
+            until [ "$n" -ge 5 ]; do
+              git pull --ff-only origin main && break
+              n=$((n+1))
+              echo "[deploy] git pull failed, retry $n/5"
+              sleep 8
+            done
+            if [ "$n" -ge 5 ]; then
+              echo "[deploy] git pull failed after retries"
+              exit 1
+            fi
             echo "[deploy] Building images"
             docker compose build
             echo "[deploy] Restarting services"
