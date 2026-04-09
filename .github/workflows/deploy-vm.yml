@@ -54,23 +54,31 @@ jobs:
           command_timeout: 30m
           script: |
             set -e
+            echo "[deploy] Entering project directory"
             cd /root/sentinelops-nf
+            echo "[deploy] Syncing repository"
             git fetch origin main
             git checkout main
-            if [ -n "$(git status --porcelain)" ]; then
+            dirty_status="$(git status --porcelain || true)"
+            if [ -n "$dirty_status" ]; then
               echo "Local changes detected on VM, creating auto-stash"
               git stash push -u -m "ci-auto-stash-$(date -u +%Y%m%dT%H%M%SZ)"
             fi
             git pull --ff-only origin main
+            echo "[deploy] Ensuring SDK source is present"
             if [ -d sentinelops-sdk/.git ]; then
               echo "Updating local SDK mirror"
               git -C sentinelops-sdk fetch origin main
               git -C sentinelops-sdk checkout main
               git -C sentinelops-sdk pull --ff-only origin main
+            elif [ -e sentinelops-sdk ] && [ ! -d sentinelops-sdk ]; then
+              echo "sentinelops-sdk exists but is not a directory"
+              exit 1
             elif [ -d sentinelops-sdk ]; then
               echo "sentinelops-sdk exists but is not a git repo; keeping it as-is"
             else
               echo "Cloning SDK repository"
               git clone https://github.com/NFETUE-Labs/sentinelops-python-sdk.git sentinelops-sdk
             fi
+            echo "[deploy] Rebuilding and restarting containers"
             docker compose up --build -d --remove-orphans
