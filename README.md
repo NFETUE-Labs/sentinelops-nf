@@ -62,22 +62,24 @@ Demo login for the local stack:
 
 The demo Flask app is wired to the same API key, so once logged in you can open the Containers tab in the dashboard and see its live container metrics.
 
-## CI/CD Deployment (DigitalOcean)
+## CI/CD Deployment (DigitalOcean VM)
 
-This repository now includes a GitHub Actions workflow at [.github/workflows/deploy-digitalocean.yml](.github/workflows/deploy-digitalocean.yml) that runs on each push to `main`.
+This repository includes a VM deployment workflow at [.github/workflows/deploy-vm.yml](.github/workflows/deploy-vm.yml) that runs on each push to `main`.
 
 To enable automatic production updates for https://app.sentinelops.page, configure these repository secrets:
 
-- `DIGITALOCEAN_ACCESS_TOKEN`: Personal Access Token with App Platform write access
-- `DIGITALOCEAN_APP_ID`: Target DigitalOcean App Platform application ID
+- `DO_HOST`: Droplet public IP or hostname
+- `DO_SSH_KEY`: Private SSH key used by GitHub Actions to connect to the droplet
 
 Deployment flow:
 
 1. Push changes to `main`
 2. GitHub Actions validates `docker-compose.yml`
-3. GitHub Actions triggers `doctl apps create-deployment <APP_ID> --wait`
+3. GitHub Actions connects by SSH and runs `docker compose up --build -d`
 
 If secrets are missing, the workflow fails early with a clear error.
+
+The App Platform workflow at [.github/workflows/deploy-digitalocean.yml](.github/workflows/deploy-digitalocean.yml) is kept for manual use only (`workflow_dispatch`).
 
 ## Python SDK
 

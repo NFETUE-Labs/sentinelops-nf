@@ -1,0 +1,61 @@
+name: Deploy To Droplet VM
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy-vm
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  verify:
+    name: Verify Compose Config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate docker-compose file
+        run: docker compose -f docker-compose.yml config >/dev/null
+
+  deploy:
+    name: Deploy Over SSH
+    runs-on: ubuntu-latest
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Validate deployment secrets
+        env:
+          DO_HOST: ${{ secrets.DO_HOST }}
+          DO_SSH_KEY: ${{ secrets.DO_SSH_KEY }}
+        run: |
+          if [ -z "$DO_HOST" ]; then
+            echo "DO_HOST is missing"
+            exit 1
+          fi
+          if [ -z "$DO_SSH_KEY" ]; then
+            echo "DO_SSH_KEY is missing"
+            exit 1
+          fi
+
+      - name: Deploy on VM
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: root
+          key: ${{ secrets.DO_SSH_KEY }}
+          script_stop: true
+          command_timeout: 30m
+          script: |
+            set -e
+            cd /root/sentinelops-nf
+            git fetch origin main
+            git checkout main
+            git pull --ff-only origin main
+            docker compose up --build -d --remove-orphans
