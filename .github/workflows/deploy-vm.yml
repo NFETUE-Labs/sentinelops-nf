@@ -57,5 +57,9 @@ jobs:
             cd /root/sentinelops-nf
             git fetch origin main
             git checkout main
+            if [ -n "$(git status --porcelain)" ]; then
+              echo "Local changes detected on VM, creating auto-stash"
+              git stash push -u -m "ci-auto-stash-$(date -u +%Y%m%dT%H%M%SZ)"
+            fi
             git pull --ff-only origin main
             docker compose up --build -d --remove-orphans
