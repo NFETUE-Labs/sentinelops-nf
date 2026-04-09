@@ -61,12 +61,19 @@ jobs:
               local attempts="$1"
               shift
               local n=1
+              local rc=0
               while true; do
-                "$@" && return 0
-                if [[ "$n" -ge "$attempts" ]]; then
-                  return 1
+                set +e
+                "$@"
+                rc=$?
+                set -e
+                if [[ "$rc" -eq 0 ]]; then
+                  return 0
                 fi
-                echo "[deploy] command failed (attempt $n/$attempts): $*"
+                if [[ "$n" -ge "$attempts" ]]; then
+                  return "$rc"
+                fi
+                echo "[deploy] command failed (attempt $n/$attempts, rc=$rc): $*"
                 n=$((n+1))
                 sleep 8
               done
