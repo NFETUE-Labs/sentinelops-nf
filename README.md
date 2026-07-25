@@ -44,8 +44,16 @@ React Dashboard  → real-time anomalies, traces, infra, containers
 ```bash
 git clone https://github.com/NFETUE-Labs/sentinelops-nf
 cd sentinelops-nf
+cp .env.example .env
 docker compose up --build -d
 ```
+
+Before starting, update `.env` with non-default secrets for:
+
+- `SECRET_KEY`
+- `POSTGRES_PASSWORD`
+- `CLICKHOUSE_PASSWORD`
+- `GRAFANA_ADMIN_PASSWORD`
 
 Services available after startup:
 

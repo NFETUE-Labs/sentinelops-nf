@@ -2,3 +2,4 @@ clickhouse-driver
 schedule
 python-dotenv
 requests
+psycopg2-binary

@@ -6,7 +6,7 @@ services:
     ports:
       - "5000:5000"
     environment:
-      - SENTINELOPS_API_KEY=demo-api-key
+      - SENTINELOPS_API_KEY=${DEMO_USER_API_KEY:-demo-api-key}
       - SENTINELOPS_ENDPOINT=http://otel-collector:4317
       - SENTINELOPS_COLLECT_CONTAINERS=1
     volumes:
@@ -48,9 +48,9 @@ services:
       - "8123:8123"
       - "9000:9000"
     environment:
-      - CLICKHOUSE_DB=sentinelops
-      - CLICKHOUSE_USER=admin
-      - CLICKHOUSE_PASSWORD=sentinel123
+      - CLICKHOUSE_DB=${CLICKHOUSE_DATABASE:-sentinelops}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:?CLICKHOUSE_USER is required}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -65,13 +65,13 @@ services:
     ports:
       - "5432:5432"
     environment:
-      - POSTGRES_DB=sentinelops
-      - POSTGRES_USER=admin
-      - POSTGRES_PASSWORD=sentinel123
+      - POSTGRES_DB=${POSTGRES_DB:-sentinelops}
+      - POSTGRES_USER=${POSTGRES_USER:?POSTGRES_USER is required}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d sentinelops"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-sentinelops}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -80,9 +80,18 @@ services:
     build: ./anomaly_detector
     environment:
       - PYTHONUNBUFFERED=1
-      - WEBHOOK_URL=https://webhook.site/a4242c27-db18-4d94-b66e-64f2effa0796
+      - WEBHOOK_URL=${GLOBAL_ALERT_WEBHOOK_URL:-}
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is required}
+      - CLICKHOUSE_HOST=${CLICKHOUSE_HOST:-clickhouse}
+      - CLICKHOUSE_PORT=${CLICKHOUSE_PORT:-9000}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:?CLICKHOUSE_USER is required}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}
+      - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-sentinelops}
+      - ALERT_COOLDOWN_SECONDS=${ALERT_COOLDOWN_SECONDS:-300}
     depends_on:
       clickhouse:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     restart: on-failure
 
@@ -92,12 +101,20 @@ services:
       - "8000:8000"
     environment:
       - PYTHONUNBUFFERED=1
-      - DATABASE_URL=postgresql://admin:sentinel123@postgres:5432/sentinelops
-      - SECRET_KEY=sentinelops-secret-key-change-in-production
-      - SENTRY_DSN_BACKEND=https://0f4f1b08a40f1690501084ed2377bf9d@o4511017293971456.ingest.de.sentry.io/4511052951126096
-      - DEMO_USER_EMAIL=demo@sentinelops.local
-      - DEMO_USER_PASSWORD=demo123
-      - DEMO_USER_API_KEY=demo-api-key
+      - APP_ENV=${APP_ENV:-development}
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is required}
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
+      - SENTRY_DSN_BACKEND=${SENTRY_DSN_BACKEND:-}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:3001}
+      - PASSWORD_MIN_LENGTH=${PASSWORD_MIN_LENGTH:-10}
+      - CLICKHOUSE_HOST=${CLICKHOUSE_HOST:-clickhouse}
+      - CLICKHOUSE_PORT=${CLICKHOUSE_PORT:-9000}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:?CLICKHOUSE_USER is required}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required}
+      - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-sentinelops}
+      - DEMO_USER_EMAIL=${DEMO_USER_EMAIL:-}
+      - DEMO_USER_PASSWORD=${DEMO_USER_PASSWORD:-}
+      - DEMO_USER_API_KEY=${DEMO_USER_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -119,7 +136,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
     depends_on:
       - prometheus
 
