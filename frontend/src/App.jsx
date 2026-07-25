@@ -5,7 +5,7 @@ const API = '/api'
 function useApi(token) {
   const get = useCallback(async (path) => {
     const res = await fetch(`${API}${path}`, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { Authorization: "Bearer " + token }
     })
     if (!res.ok) throw new Error(String(res.status))
     return res.json()
@@ -128,28 +128,65 @@ function Dashboard({ token, onLogout }) {
   const [traces, setTraces] = useState([])
   const [infra, setInfra] = useState([])
   const [containers, setContainers] = useState([])
+  const [sqlQueries, setSqlQueries] = useState([])
+  const [diagnosis, setDiagnosis] = useState(null)
+  const [diagnosisLoading, setDiagnosisLoading] = useState(false)
+  const [billing, setBilling] = useState(null)
+  const [billingError, setBillingError] = useState('')
   const [tab, setTab] = useState('anomalies')
   const [lastUpdate, setLastUpdate] = useState(null)
 
   const refresh = useCallback(async () => {
     try {
-      const [s, a, t, i, c] = await Promise.all([
+      const [s, a, t, i, c, q, b] = await Promise.all([
         get('/stats'),
         get('/anomalies?limit=20'),
         get('/traces?limit=20'),
         get('/infra?limit=10'),
-        get('/containers?limit=20')
+        get('/containers?limit=20'),
+        get('/sql-queries?limit=20'),
+        get('/billing')
       ])
       setStats(s)
       setAnomalies(a)
       setTraces(t)
       setInfra(i)
       setContainers(c)
+      setSqlQueries(q)
+      setBilling(b)
       setLastUpdate(new Date())
     } catch (e) {
       if (e.message === '401') onLogout()
     }
   }, [get, onLogout])
+
+  const runDiagnosis = useCallback(async () => {
+    setDiagnosisLoading(true)
+    try {
+      const data = await get('/incidents/diagnose')
+      setDiagnosis(data)
+    } finally {
+      setDiagnosisLoading(false)
+    }
+  }, [get])
+
+  const startBillingCheckout = useCallback(async () => {
+    setBillingError('')
+    try {
+      const res = await fetch(`${API}/billing/checkout-session`, {
+        method: 'POST',
+        headers: { Authorization: "Bearer " + token }
+      })
+      if (!res.ok) {
+        setBillingError('Stripe billing is not configured yet')
+        return
+      }
+      const data = await res.json()
+      if (data.checkout_url) window.location.href = data.checkout_url
+    } catch {
+      setBillingError('Unable to start checkout')
+    }
+  }, [token])
 
   useEffect(() => {
     refresh()
@@ -174,9 +211,18 @@ function Dashboard({ token, onLogout }) {
           <div className="pill pill-ok">live</div>
           <div className="compact-note">{lastUpdate ? `updated ${lastUpdate.toLocaleTimeString()}` : 'loading...'}</div>
           <div className="status-dot" />
+          <div className="compact-note">
+            plan: {billing?.subscription_status || 'inactive'}
+          </div>
+          <button onClick={startBillingCheckout} className="ghost-button">upgrade</button>
           <button onClick={onLogout} className="ghost-button">logout</button>
         </div>
       </div>
+      {billingError && (
+        <div className="page" style={{ paddingTop: 0 }}>
+          <div className="panel-soft" style={{ padding: 10, borderRadius: 12, color: '#fb7185' }}>{billingError}</div>
+        </div>
+      )}
 
       <div className="page">
         <div className="hero-grid fade-in">
@@ -224,7 +270,7 @@ function Dashboard({ token, onLogout }) {
               <div className="section-subtitle">Live app traces, infra, and container snapshots</div>
             </div>
             <div className="tabs">
-              {['anomalies', 'traces', 'infrastructure', 'containers'].map((t) => (
+              {['anomalies', 'traces', 'infrastructure', 'containers', 'sql'].map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
@@ -236,6 +282,8 @@ function Dashboard({ token, onLogout }) {
                       ? `traces (${traces.length})`
                       : t === 'containers'
                         ? `containers (${containers.length})`
+                       : t === 'sql'
+                         ? `sql (${sqlQueries.length})`
                         : 'infrastructure'}
                 </button>
               ))}
@@ -245,6 +293,25 @@ function Dashboard({ token, onLogout }) {
           <div className="section-body">
             {tab === 'anomalies' && (
               <div className="fade-in list-stack">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div className="compact-note">Incident diagnosis (MVP)</div>
+                  <button onClick={runDiagnosis} className="ghost-button" disabled={diagnosisLoading}>
+                    {diagnosisLoading ? 'analyzing...' : 'generate diagnosis'}
+                  </button>
+                </div>
+                {diagnosis && (
+                  <div className="panel-soft" style={{ padding: 16, borderRadius: 16, marginBottom: 8 }}>
+                    <div className="section-title" style={{ marginBottom: 8 }}>{diagnosis.summary}</div>
+                    <div className="compact-note" style={{ marginBottom: 6 }}>Probable causes</div>
+                    <ul style={{ marginLeft: 18, marginBottom: 10 }}>
+                      {diagnosis.probable_causes.map((cause, idx) => <li key={idx}>{cause}</li>)}
+                    </ul>
+                    <div className="compact-note" style={{ marginBottom: 6 }}>Recommended actions</div>
+                    <ul style={{ marginLeft: 18 }}>
+                      {diagnosis.recommended_actions.map((action, idx) => <li key={idx}>{action}</li>)}
+                    </ul>
+                  </div>
+                )}
                 {anomalies.length === 0 ? (
                   <div className="panel-soft" style={{ padding: 28, textAlign: 'center', borderRadius: 20 }}>
                     <div className="section-title" style={{ marginBottom: 8 }}>No anomalies yet</div>
@@ -390,6 +457,31 @@ function Dashboard({ token, onLogout }) {
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            {tab === 'sql' && (
+              <div className="fade-in list-stack">
+                {sqlQueries.length === 0 ? (
+                  <div className="panel-soft" style={{ padding: 28, textAlign: 'center', borderRadius: 20 }}>
+                    <div className="section-title" style={{ marginBottom: 8 }}>No SQL traces yet</div>
+                    <div className="muted">Run database-backed requests to populate SQL monitoring.</div>
+                  </div>
+                ) : sqlQueries.map((q, i) => (
+                  <div key={i} className="list-item">
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.03em' }}>{q.db_system}</div>
+                      <div className="compact-note" style={{ marginTop: 6 }}>{q.service_name}</div>
+                      <div className="compact-note" style={{ marginTop: 8, whiteSpace: 'pre-wrap' }}>{q.statement}</div>
+                    </div>
+                    <div style={{ textAlign: 'right', minWidth: 170 }}>
+                      <div style={{ color: 'var(--text)', fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 800 }}>
+                        {q.duration_ms.toFixed(2)}ms
+                      </div>
+                      <div className="compact-note">{new Date(q.timestamp).toLocaleTimeString()}</div>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

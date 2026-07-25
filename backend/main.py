@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, String, DateTime, Text
+from sqlalchemy import create_engine, Column, String, DateTime, Text, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from passlib.context import CryptContext
@@ -14,6 +14,7 @@ import uuid
 import math
 import sentry_sdk
 import re
+import stripe
 
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN_BACKEND", ""),
@@ -38,6 +39,11 @@ CORS_ALLOWED_ORIGINS = [
     for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3001").split(",")
     if origin.strip()
 ]
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:3001")
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PRICE_ID = os.getenv("STRIPE_PRICE_ID", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+DIAGNOSIS_WINDOW_MINUTES = int(os.getenv("DIAGNOSIS_WINDOW_MINUTES", "60"))
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
@@ -54,8 +60,14 @@ if not CLICKHOUSE_USER:
 if not CLICKHOUSE_PASSWORD:
     raise RuntimeError("CLICKHOUSE_PASSWORD is required")
 
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
+
 # Database
-engine = create_engine(DATABASE_URL)
+engine_kwargs = {}
+if DATABASE_URL.startswith("sqlite"):
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -120,9 +132,32 @@ class User(Base):
     hashed_password = Column(String)
     api_key = Column(String, unique=True, default=lambda: str(uuid.uuid4()))
     webhook_url = Column(Text, nullable=True)
+    stripe_customer_id = Column(String, nullable=True)
+    stripe_subscription_id = Column(String, nullable=True)
+    subscription_status = Column(String, nullable=True)
+    subscription_plan = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 Base.metadata.create_all(bind=engine)
+
+
+def ensure_postgres_schema():
+    if DATABASE_URL.startswith("sqlite"):
+        return
+    db = SessionLocal()
+    try:
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT"))
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT"))
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_status TEXT"))
+        db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_plan TEXT"))
+        db.commit()
+    except Exception as exc:
+        print(f"[SentinelOps] Postgres schema check skipped: {exc}")
+    finally:
+        db.close()
+
+
+ensure_postgres_schema()
 
 
 def seed_demo_user():
@@ -162,6 +197,8 @@ class UserResponse(BaseModel):
     email: str
     api_key: str
     webhook_url: str | None
+    subscription_status: str | None
+    subscription_plan: str | None
     created_at: datetime
 
     class Config:
@@ -173,6 +210,26 @@ class WebhookUpdate(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
+
+
+class SQLQueryMetric(BaseModel):
+    timestamp: str
+    service_name: str
+    span_name: str
+    db_system: str
+    statement: str
+    duration_ms: float
+
+
+class IncidentDiagnosis(BaseModel):
+    summary: str
+    probable_causes: list[str]
+    recommended_actions: list[str]
+    signal_snapshot: dict
+
+
+class BillingSessionResponse(BaseModel):
+    checkout_url: str
 
 
 class ContainerMetric(BaseModel):
@@ -418,3 +475,190 @@ def get_containers(limit: int = 50, current_user: User = Depends(get_current_use
         }
         for row in rows
     ]
+
+
+@app.get("/sql-queries", response_model=list[SQLQueryMetric])
+def get_sql_queries(limit: int = 50, current_user: User = Depends(get_current_user)):
+    rows = get_ch_client().execute("""
+        SELECT
+            Timestamp,
+            ServiceName,
+            SpanName,
+            Duration,
+            SpanAttributes['db.system'] as db_system,
+            SpanAttributes['db.statement'] as db_statement
+        FROM sentinelops.traces
+        WHERE ResourceAttributes['sentinelops.api_key'] = %(api_key)s
+          AND (
+              db_system != ''
+              OR positionCaseInsensitive(SpanName, 'select ') > 0
+              OR positionCaseInsensitive(SpanName, 'insert ') > 0
+              OR positionCaseInsensitive(SpanName, 'update ') > 0
+              OR positionCaseInsensitive(SpanName, 'delete ') > 0
+          )
+        ORDER BY Timestamp DESC
+        LIMIT %(limit)s
+    """, {'api_key': current_user.api_key, 'limit': limit})
+    return [
+        {
+            "timestamp": str(row[0]),
+            "service_name": row[1],
+            "span_name": row[2],
+            "duration_ms": round(row[3] / 1e6, 2),
+            "db_system": row[4] or "unknown",
+            "statement": row[5] or row[2],
+        }
+        for row in rows
+    ]
+
+
+@app.get("/incidents/diagnose", response_model=IncidentDiagnosis)
+def diagnose_incident(current_user: User = Depends(get_current_user)):
+    window_minutes = max(5, DIAGNOSIS_WINDOW_MINUTES)
+    anomaly_count = 0
+    top_spans = []
+    if anomalies_has_api_key():
+        anomaly_count = get_ch_client().execute("""
+            SELECT count()
+            FROM sentinelops.anomalies
+            WHERE api_key = %(api_key)s
+              AND timestamp > now() - INTERVAL %(window)s MINUTE
+        """, {'api_key': current_user.api_key, 'window': window_minutes})[0][0]
+        top_spans = get_ch_client().execute("""
+            SELECT metric_name, count() as c, avg(actual_value) as avg_ms
+            FROM sentinelops.anomalies
+            WHERE api_key = %(api_key)s
+              AND timestamp > now() - INTERVAL %(window)s MINUTE
+            GROUP BY metric_name
+            ORDER BY c DESC
+            LIMIT 3
+        """, {'api_key': current_user.api_key, 'window': window_minutes})
+
+    infra = get_ch_client().execute("""
+        SELECT
+            avg(toFloat64OrZero(SpanAttributes['metric.cpu_percent'])) as cpu,
+            avg(toFloat64OrZero(SpanAttributes['metric.memory_percent'])) as memory,
+            avg(toFloat64OrZero(SpanAttributes['metric.disk_percent'])) as disk
+        FROM sentinelops.traces
+        WHERE ResourceAttributes['sentinelops.api_key'] = %(api_key)s
+          AND SpanName = 'sentinelops.infra.metrics'
+          AND Timestamp > now() - INTERVAL %(window)s MINUTE
+    """, {'api_key': current_user.api_key, 'window': window_minutes})[0]
+
+    cpu_avg = round(float(infra[0] or 0), 2)
+    mem_avg = round(float(infra[1] or 0), 2)
+    disk_avg = round(float(infra[2] or 0), 2)
+
+    causes = []
+    actions = []
+
+    if anomaly_count == 0:
+        summary = f"No anomalies detected in the last {window_minutes} minutes for this tenant."
+        causes.append("No active latency spike currently observed.")
+        actions.append("Continue traffic generation to build historical baseline.")
+    else:
+        summary = f"Detected {anomaly_count} anomalies in the last {window_minutes} minutes."
+        if top_spans:
+            hot_span = top_spans[0]
+            causes.append(f"Endpoint {hot_span[0]} is the primary hotspot.")
+            actions.append(f"Profile and optimize endpoint {hot_span[0]}.")
+        if cpu_avg > 80:
+            causes.append("High average CPU usage correlates with latency spikes.")
+            actions.append("Scale out workers or reduce CPU-heavy work on hot path.")
+        if mem_avg > 85:
+            causes.append("Memory pressure may be amplifying response times.")
+            actions.append("Review memory growth and container memory limits.")
+        if not causes:
+            causes.append("Query-level or downstream dependency latency is likely.")
+            actions.append("Inspect slow traces and database spans for bottlenecks.")
+
+    return {
+        "summary": summary,
+        "probable_causes": causes,
+        "recommended_actions": actions,
+        "signal_snapshot": {
+            "window_minutes": window_minutes,
+            "anomaly_count": anomaly_count,
+            "avg_cpu_percent": cpu_avg,
+            "avg_memory_percent": mem_avg,
+            "avg_disk_percent": disk_avg,
+            "top_anomaly_spans": [
+                {"span": row[0], "count": row[1], "avg_ms": round(float(row[2] or 0), 2)}
+                for row in top_spans
+            ],
+        },
+    }
+
+
+def ensure_stripe_customer(current_user: User, db: Session) -> str:
+    if current_user.stripe_customer_id:
+        return current_user.stripe_customer_id
+    customer = stripe.Customer.create(email=current_user.email)
+    current_user.stripe_customer_id = customer.id
+    db.commit()
+    db.refresh(current_user)
+    return customer.id
+
+
+@app.get("/billing")
+def get_billing(current_user: User = Depends(get_current_user)):
+    return {
+        "customer_id": current_user.stripe_customer_id,
+        "subscription_id": current_user.stripe_subscription_id,
+        "subscription_status": current_user.subscription_status or "inactive",
+        "subscription_plan": current_user.subscription_plan,
+    }
+
+
+@app.post("/billing/checkout-session", response_model=BillingSessionResponse)
+def create_checkout_session(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not STRIPE_SECRET_KEY or not STRIPE_PRICE_ID:
+        raise HTTPException(status_code=503, detail="Stripe billing is not configured")
+
+    customer_id = ensure_stripe_customer(current_user, db)
+    checkout_session = stripe.checkout.Session.create(
+        mode="subscription",
+        customer=customer_id,
+        line_items=[{"price": STRIPE_PRICE_ID, "quantity": 1}],
+        success_url=f"{FRONTEND_BASE_URL}/?billing=success",
+        cancel_url=f"{FRONTEND_BASE_URL}/?billing=cancel",
+    )
+    return {"checkout_url": checkout_session.url}
+
+
+@app.post("/billing/webhook")
+async def billing_webhook(request: Request, db: Session = Depends(get_db)):
+    payload = await request.body()
+    signature = request.headers.get("Stripe-Signature", "")
+
+    try:
+        if STRIPE_WEBHOOK_SECRET:
+            event = stripe.Webhook.construct_event(payload, signature, STRIPE_WEBHOOK_SECRET)
+        else:
+            event = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload")
+
+    event_type = event.get("type")
+    data = event.get("data", {}).get("object", {})
+
+    if event_type == "checkout.session.completed":
+        customer_id = data.get("customer")
+        subscription_id = data.get("subscription")
+        if customer_id:
+            user = db.query(User).filter(User.stripe_customer_id == customer_id).first()
+            if user:
+                user.stripe_subscription_id = subscription_id
+                user.subscription_status = "active"
+                user.subscription_plan = STRIPE_PRICE_ID or "default"
+                db.commit()
+    elif event_type in {"customer.subscription.updated", "customer.subscription.deleted"}:
+        subscription_id = data.get("id")
+        status_value = data.get("status", "inactive")
+        if subscription_id:
+            user = db.query(User).filter(User.stripe_subscription_id == subscription_id).first()
+            if user:
+                user.subscription_status = status_value
+                db.commit()
+
+    return {"received": True}
